@@ -56,4 +56,16 @@ USERSIM_API void
 usersim_fwp_set_sublayer_guids(
     _In_ const GUID& default_sublayer, _In_ const GUID& connect_v4_sublayer, _In_ const GUID& connect_v6_sublayer);
 
+USERSIM_API FWP_ACTION_TYPE
+usersim_fwp_flow_classify_ale_v4(_In_ fwp_classify_parameters_t* parameters);
+
+USERSIM_API FWP_ACTION_TYPE
+usersim_fwp_flow_classify_ale_v6(_In_ fwp_classify_parameters_t* parameters);
+
+USERSIM_API FWP_ACTION_TYPE
+usersim_fwp_flow_classify_stream_v4(_In_ fwp_classify_parameters_t* parameters);
+
+USERSIM_API FWP_ACTION_TYPE
+usersim_fwp_flow_classify_stream_v6(_In_ fwp_classify_parameters_t* parameters);
+
 CXPLAT_EXTERN_C_END

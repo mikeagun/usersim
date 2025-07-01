@@ -238,6 +238,18 @@ typedef class fwp_engine_t
     FWP_ACTION_TYPE
     test_sock_ops_v6(_In_ fwp_classify_parameters_t* parameters);
 
+    FWP_ACTION_TYPE
+    test_flow_classify_ale_v4(_In_ fwp_classify_parameters_t* parameters);
+
+    FWP_ACTION_TYPE
+    test_flow_classify_ale_v6(_In_ fwp_classify_parameters_t* parameters);
+
+    FWP_ACTION_TYPE
+    test_flow_classify_stream_v4(_In_ fwp_classify_parameters_t* parameters);
+
+    FWP_ACTION_TYPE
+    test_flow_classify_stream_v6(_In_ fwp_classify_parameters_t* parameters);
+
     static fwp_engine_t*
     get()
     {
