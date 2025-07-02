@@ -175,7 +175,10 @@ _Requires_lock_not_held_(this->lock) FWP_ACTION_TYPE fwp_engine_t::test_callout(
             return FWP_ACTION_CALLOUT_UNKNOWN;
         }
 
+        // Initialize metadata values for flow_classify tests
         incoming_metadata_values.flowHandle = next_flow_id++;
+        incoming_metadata_values.currentMetadataValues = FWPS_METADATA_FIELD_FLOW_HANDLE | FWPS_METADATA_FIELD_PROCESS_ID;
+        incoming_metadata_values.processId = GetCurrentProcessId();
     }
 
     FWPS_CLASSIFY_OUT0 result = {};
@@ -430,6 +433,7 @@ fwp_engine_t::test_flow_classify_ale_v4(_In_ fwp_classify_parameters_t* paramete
     incoming_value[FWPS_FIELD_ALE_FLOW_ESTABLISHED_V4_COMPARTMENT_ID].value.uint32 = parameters->compartment_id;
     incoming_value[FWPS_FIELD_ALE_FLOW_ESTABLISHED_V4_IP_LOCAL_INTERFACE].value.uint64 = &parameters->interface_luid;
     incoming_value[FWPS_FIELD_ALE_FLOW_ESTABLISHED_V4_ALE_APP_ID].value.byteBlob = &parameters->app_id;
+    incoming_value[FWPS_FIELD_ALE_FLOW_ESTABLISHED_V4_ALE_USER_ID].value.byteBlob = &parameters->user_id;
 
     return test_callout(
         FWPS_LAYER_ALE_FLOW_ESTABLISHED_V4, FWPM_LAYER_ALE_FLOW_ESTABLISHED_V4, _default_sublayer, incoming_value);
@@ -450,6 +454,7 @@ fwp_engine_t::test_flow_classify_ale_v6(_In_ fwp_classify_parameters_t* paramete
     incoming_value[FWPS_FIELD_ALE_FLOW_ESTABLISHED_V6_COMPARTMENT_ID].value.uint32 = parameters->compartment_id;
     incoming_value[FWPS_FIELD_ALE_FLOW_ESTABLISHED_V6_IP_LOCAL_INTERFACE].value.uint64 = &parameters->interface_luid;
     incoming_value[FWPS_FIELD_ALE_FLOW_ESTABLISHED_V6_ALE_APP_ID].value.byteBlob = &parameters->app_id;
+    incoming_value[FWPS_FIELD_ALE_FLOW_ESTABLISHED_V6_ALE_USER_ID].value.byteBlob = &parameters->user_id;
 
     return test_callout(
         FWPS_LAYER_ALE_FLOW_ESTABLISHED_V6, FWPM_LAYER_ALE_FLOW_ESTABLISHED_V6, _default_sublayer, incoming_value);
@@ -459,15 +464,15 @@ fwp_engine_t::test_flow_classify_ale_v6(_In_ fwp_classify_parameters_t* paramete
 FWP_ACTION_TYPE
 fwp_engine_t::test_flow_classify_stream_v4(_In_ fwp_classify_parameters_t* parameters)
 {
-    // TODO: Implement stream layer field mapping for IPv4
     // Note: Stream layer has different field indices than ALE layer
     FWPS_INCOMING_VALUE0 incoming_value[FWPS_FIELD_STREAM_V4_MAX] = {};
     incoming_value[FWPS_FIELD_STREAM_V4_IP_LOCAL_ADDRESS].value.uint32 = parameters->destination_ipv4_address;
     incoming_value[FWPS_FIELD_STREAM_V4_IP_LOCAL_PORT].value.uint16 = parameters->destination_port;
     incoming_value[FWPS_FIELD_STREAM_V4_IP_REMOTE_ADDRESS].value.uint32 = parameters->source_ipv4_address;
     incoming_value[FWPS_FIELD_STREAM_V4_IP_REMOTE_PORT].value.uint16 = parameters->source_port;
+    incoming_value[FWPS_FIELD_STREAM_V4_DIRECTION].value.uint32 = FWP_DIRECTION_OUTBOUND;
     incoming_value[FWPS_FIELD_STREAM_V4_COMPARTMENT_ID].value.uint32 = parameters->compartment_id;
-    // Note: Stream layer doesn't have protocol or interface fields
+    // Note: Stream layer doesn't have protocol or interface fields - protocol is implicitly TCP
 
     return test_callout(FWPS_LAYER_STREAM_V4, FWPM_LAYER_STREAM_V4, _default_sublayer, incoming_value);
 }
@@ -476,15 +481,15 @@ fwp_engine_t::test_flow_classify_stream_v4(_In_ fwp_classify_parameters_t* param
 FWP_ACTION_TYPE
 fwp_engine_t::test_flow_classify_stream_v6(_In_ fwp_classify_parameters_t* parameters)
 {
-    // TODO: Implement stream layer field mapping for IPv6
     // Note: Stream layer has different field indices than ALE layer
     FWPS_INCOMING_VALUE0 incoming_value[FWPS_FIELD_STREAM_V6_MAX] = {};
     incoming_value[FWPS_FIELD_STREAM_V6_IP_LOCAL_ADDRESS].value.byteArray16 = &parameters->destination_ipv6_address;
     incoming_value[FWPS_FIELD_STREAM_V6_IP_LOCAL_PORT].value.uint16 = parameters->destination_port;
     incoming_value[FWPS_FIELD_STREAM_V6_IP_REMOTE_ADDRESS].value.byteArray16 = &parameters->source_ipv6_address;
     incoming_value[FWPS_FIELD_STREAM_V6_IP_REMOTE_PORT].value.uint16 = parameters->source_port;
+    incoming_value[FWPS_FIELD_STREAM_V6_DIRECTION].value.uint32 = FWP_DIRECTION_OUTBOUND;
     incoming_value[FWPS_FIELD_STREAM_V6_COMPARTMENT_ID].value.uint32 = parameters->compartment_id;
-    // Note: Stream layer doesn't have protocol or interface fields
+    // Note: Stream layer doesn't have protocol or interface fields - protocol is implicitly TCP
 
     return test_callout(FWPS_LAYER_STREAM_V6, FWPM_LAYER_STREAM_V6, _default_sublayer, incoming_value);
 }
