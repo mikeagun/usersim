@@ -38,6 +38,7 @@ EXPORTS
     FwpsRedirectHandleCreate0
     FwpsRedirectHandleDestroy0
     FwpsReleaseClassifyHandle0
+    FwpsCopyStreamDataToBuffer0
 
     NmrRegisterClient
     NmrClientAttachProvider

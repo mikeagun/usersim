@@ -977,6 +977,92 @@ _IRQL_requires_max_(DISPATCH_LEVEL) void NTAPI
     CXPLAT_DEBUG_ASSERT(modifiedLayerData != nullptr);
 }
 
+#define NET_BUFFER_LIST_NEXT_NBL(_NBL)              ((_NBL)->Next)
+#define NET_BUFFER_LIST_FIRST_NB(_NBL)              ((_NBL)->FirstNetBuffer)
+
+#define NET_BUFFER_NEXT_NB(_NB)                     ((_NB)->Next)
+#define NET_BUFFER_FIRST_MDL(_NB)                   ((_NB)->MdlChain)
+#define NET_BUFFER_DATA_LENGTH(_NB)                 ((_NB)->DataLength)
+#define NET_BUFFER_DATA_OFFSET(_NB)                 ((_NB)->DataOffset)
+#define NET_BUFFER_CURRENT_MDL(_NB)                 ((_NB)->CurrentMdl)
+#define NET_BUFFER_CURRENT_MDL_OFFSET(_NB)          ((_NB)->CurrentMdlOffset)
+
+_IRQL_requires_max_(DISPATCH_LEVEL) void NTAPI FwpsCopyStreamDataToBuffer0(
+    _In_ const FWPS_STREAM_DATA* streamData,
+    _Out_writes_bytes_(bufferSize) void* buffer,
+    _In_ SIZE_T bufferSize,
+    _Out_ SIZE_T* bytesCopied)
+{
+    if (cxplat_fault_injection_inject_fault()) {
+        *bytesCopied = 0;
+        return;
+    }
+
+    *bytesCopied = 0;
+    
+    if (buffer == nullptr || bufferSize == 0 || streamData == nullptr) {
+        return;
+    }
+    
+    if (streamData->netBufferListChain != nullptr) {
+        NET_BUFFER_LIST* nbl = streamData->netBufferListChain;
+        SIZE_T totalCopied = 0;
+        
+        // Iterate through the NET_BUFFER_LIST chain
+        while (nbl != nullptr && totalCopied < bufferSize) {
+            NET_BUFFER* nb = NET_BUFFER_LIST_FIRST_NB(nbl);
+            
+            // Iterate through NET_BUFFERs in this NET_BUFFER_LIST
+            while (nb != nullptr && totalCopied < bufferSize) {
+                SIZE_T nbDataLength = NET_BUFFER_DATA_LENGTH(nb);
+                SIZE_T copySize = min(nbDataLength, bufferSize - totalCopied);
+                
+                if (copySize > 0) {
+                    // Try to get contiguous data from NET_BUFFER
+                    void* nbData = NdisGetDataBuffer(nb, (ULONG)copySize, nullptr, 1, 0);
+                    
+                    if (nbData != nullptr) {
+                        // Data is contiguous, copy directly
+                        memcpy((char*)buffer + totalCopied, nbData, copySize);
+                        totalCopied += copySize;
+                    } else {
+                        // Data is not contiguous, copy what we can from MDL chain
+                        MDL* mdl = NET_BUFFER_CURRENT_MDL(nb);
+                        SIZE_T mdlOffset = NET_BUFFER_CURRENT_MDL_OFFSET(nb);
+                        SIZE_T remainingToCopy = copySize;
+                        
+                        while (mdl != nullptr && remainingToCopy > 0 && totalCopied < bufferSize) {
+                            void* mdlVa = MmGetSystemAddressForMdlSafe(mdl, NormalPagePriority);
+                            if (mdlVa != nullptr) {
+                                SIZE_T mdlLength = MmGetMdlByteCount(mdl);
+                                SIZE_T availableInMdl = (mdlLength > mdlOffset) ? (mdlLength - mdlOffset) : 0;
+                                SIZE_T mdlCopySize = min(remainingToCopy, availableInMdl);
+                                
+                                if (mdlCopySize > 0) {
+                                    memcpy((char*)buffer + totalCopied, (char*)mdlVa + mdlOffset, mdlCopySize);
+                                    totalCopied += mdlCopySize;
+                                    remainingToCopy -= mdlCopySize;
+                                }
+                                mdlOffset = 0; // Only first MDL has offset
+                            }
+                            mdl = mdl->next;
+                        }
+                    }
+                }
+                
+                nb = NET_BUFFER_NEXT_NB(nb);
+            }
+            
+            nbl = NET_BUFFER_LIST_NEXT_NBL(nbl);
+        }
+        
+        *bytesCopied = totalCopied;
+    } else {
+        // No data available
+        *bytesCopied = 0;
+    }
+}
+
 _IRQL_requires_(PASSIVE_LEVEL) NTSTATUS NTAPI
     FwpsRedirectHandleCreate0(_In_ const GUID* providerGuid, _Reserved_ UINT32 flags, _Out_ HANDLE* redirectHandle)
 {
