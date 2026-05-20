@@ -147,6 +147,63 @@ fwp_engine_t::test_bind_ipv4(_In_ fwp_classify_parameters_t* parameters)
         nullptr);
 }
 
+// This is used to test the bind hook for IPv6 traffic at the resource-assignment layer.
+FWP_ACTION_TYPE
+fwp_engine_t::test_bind_ipv6(_In_ fwp_classify_parameters_t* parameters)
+{
+    FWPS_INCOMING_VALUE0 incoming_value[FWPS_FIELD_ALE_RESOURCE_ASSIGNMENT_V6_MAX] = {};
+    incoming_value[FWPS_FIELD_ALE_RESOURCE_ASSIGNMENT_V6_IP_LOCAL_PORT].value.uint16 = parameters->destination_port;
+    incoming_value[FWPS_FIELD_ALE_RESOURCE_ASSIGNMENT_V6_IP_LOCAL_ADDRESS].value.byteArray16 =
+        &parameters->destination_ipv6_address;
+    incoming_value[FWPS_FIELD_ALE_RESOURCE_ASSIGNMENT_V6_IP_PROTOCOL].value.uint8 = parameters->protocol;
+    incoming_value[FWPS_FIELD_ALE_RESOURCE_ASSIGNMENT_V6_ALE_APP_ID].value.byteBlob = &parameters->app_id;
+
+    return test_callout(
+        FWPS_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
+        FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
+        _default_sublayer,
+        incoming_value,
+        nullptr);
+}
+
+// This is used to test the bind hook's IPv4 resource-release (unbind) path.
+FWP_ACTION_TYPE
+fwp_engine_t::test_bind_release_ipv4(_In_ fwp_classify_parameters_t* parameters)
+{
+    FWPS_INCOMING_VALUE0 incoming_value[FWPS_FIELD_ALE_RESOURCE_RELEASE_V4_MAX] = {};
+    incoming_value[FWPS_FIELD_ALE_RESOURCE_RELEASE_V4_IP_LOCAL_PORT].value.uint16 = parameters->destination_port;
+    incoming_value[FWPS_FIELD_ALE_RESOURCE_RELEASE_V4_IP_LOCAL_ADDRESS].value.uint32 =
+        parameters->destination_ipv4_address;
+    incoming_value[FWPS_FIELD_ALE_RESOURCE_RELEASE_V4_IP_PROTOCOL].value.uint8 = parameters->protocol;
+    incoming_value[FWPS_FIELD_ALE_RESOURCE_RELEASE_V4_ALE_APP_ID].value.byteBlob = &parameters->app_id;
+
+    return test_callout(
+        FWPS_LAYER_ALE_RESOURCE_RELEASE_V4,
+        FWPM_LAYER_ALE_RESOURCE_RELEASE_V4,
+        _default_sublayer,
+        incoming_value,
+        nullptr);
+}
+
+// This is used to test the bind hook's IPv6 resource-release (unbind) path.
+FWP_ACTION_TYPE
+fwp_engine_t::test_bind_release_ipv6(_In_ fwp_classify_parameters_t* parameters)
+{
+    FWPS_INCOMING_VALUE0 incoming_value[FWPS_FIELD_ALE_RESOURCE_RELEASE_V6_MAX] = {};
+    incoming_value[FWPS_FIELD_ALE_RESOURCE_RELEASE_V6_IP_LOCAL_PORT].value.uint16 = parameters->destination_port;
+    incoming_value[FWPS_FIELD_ALE_RESOURCE_RELEASE_V6_IP_LOCAL_ADDRESS].value.byteArray16 =
+        &parameters->destination_ipv6_address;
+    incoming_value[FWPS_FIELD_ALE_RESOURCE_RELEASE_V6_IP_PROTOCOL].value.uint8 = parameters->protocol;
+    incoming_value[FWPS_FIELD_ALE_RESOURCE_RELEASE_V6_ALE_APP_ID].value.byteBlob = &parameters->app_id;
+
+    return test_callout(
+        FWPS_LAYER_ALE_RESOURCE_RELEASE_V6,
+        FWPM_LAYER_ALE_RESOURCE_RELEASE_V6,
+        _default_sublayer,
+        incoming_value,
+        nullptr);
+}
+
 _Requires_lock_not_held_(this->lock) FWP_ACTION_TYPE fwp_engine_t::test_callout(
     uint16_t layer_id,
     _In_ const GUID& layer_guid,
@@ -1004,6 +1061,24 @@ FWP_ACTION_TYPE
 usersim_fwp_bind_ipv4(_In_ fwp_classify_parameters_t* parameters)
 {
     return fwp_engine_t::get()->test_bind_ipv4(parameters);
+}
+
+FWP_ACTION_TYPE
+usersim_fwp_bind_ipv6(_In_ fwp_classify_parameters_t* parameters)
+{
+    return fwp_engine_t::get()->test_bind_ipv6(parameters);
+}
+
+FWP_ACTION_TYPE
+usersim_fwp_bind_release_ipv4(_In_ fwp_classify_parameters_t* parameters)
+{
+    return fwp_engine_t::get()->test_bind_release_ipv4(parameters);
+}
+
+FWP_ACTION_TYPE
+usersim_fwp_bind_release_ipv6(_In_ fwp_classify_parameters_t* parameters)
+{
+    return fwp_engine_t::get()->test_bind_release_ipv6(parameters);
 }
 
 FWP_ACTION_TYPE
