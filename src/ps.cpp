@@ -3,6 +3,7 @@
 
 #include "kernel_um.h"
 #include "platform.h"
+#include "usersim/nt_process_info.h"
 #include "usersim/ps.h"
 
 #include <assert.h>
@@ -18,45 +19,6 @@ _IRQL_requires_max_(DISPATCH_LEVEL) NTKERNELAPI HANDLE PsGetCurrentThreadId()
 {
     return (HANDLE)(uintptr_t)GetCurrentThreadId();
 }
-
-typedef struct _PROCESS_TELEMETRY_ID_INFORMATION
-{
-    ULONG HeaderSize;
-    ULONG ProcessId;
-    ULONG64 ProcessStartKey;
-    ULONG64 CreateTime;
-    ULONG64 CreateInterruptTime;
-    ULONG64 CreateUnbiasedInterruptTime;
-    ULONG64 ProcessSequenceNumber;
-    ULONG64 SessionCreateTime;
-    ULONG SessionId;
-    ULONG BootId;
-    ULONG ImageChecksum;
-    ULONG ImageTimeDateStamp;
-    ULONG UserSidOffset;
-    ULONG ImagePathOffset;
-    ULONG PackageNameOffset;
-    ULONG RelativeAppNameOffset;
-    ULONG CommandLineOffset;
-} PROCESS_TELEMETRY_ID_INFORMATION, *PPROCESS_TELEMETRY_ID_INFORMATION;
-
-typedef enum _PROCESSINFOCLASS
-{
-    ProcessBasicInformation = 0,
-    ProcessDebugPort = 7,
-    ProcessWow64Information = 26,
-    ProcessImageFileName = 27,
-    ProcessBreakOnTermination = 29,
-    ProcessTelemetryIdInformation = 64,
-    ProcessSubsystemInformation = 75
-} PROCESSINFOCLASS;
-
-typedef NTSTATUS (NTAPI *NtQueryInformationProcess_t)(
-    _In_ HANDLE ProcessHandle,
-    _In_ PROCESSINFOCLASS ProcessInformationClass,
-    _Out_writes_bytes_(ProcessInformationLength) PVOID ProcessInformation,
-    _In_ ULONG ProcessInformationLength,
-    _Out_opt_ PULONG ReturnLength);
 
 static PGETPROCESSSTARTKEY _usersim_get_process_start_key_callback = nullptr;
 USERSIM_API
