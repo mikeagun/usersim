@@ -65,6 +65,19 @@ USERSIM_API void
 usersim_fwp_set_sublayer_guids(
     _In_ const GUID& default_sublayer, _In_ const GUID& connect_v4_sublayer, _In_ const GUID& connect_v6_sublayer);
 
+// Test-only: fail the next 'count' WFP FwpmFilterDeleteById calls without removing the filter or issuing a delete
+// notification, reproducing the DELETE_FAILED reference-leak scenario. Pass 0 to clear the injection.
+USERSIM_API void
+usersim_fwp_set_filter_delete_failure_count(uint32_t count);
+
+// Test-only: number of WFP filters currently present in the simulated engine.
+USERSIM_API uint32_t
+usersim_fwp_get_fwpm_filter_count();
+
+// Test-only: remove any WFP filters left in the simulated engine (cleanup after fault-injection tests).
+USERSIM_API void
+usersim_fwp_clear_fwpm_filters();
+
 USERSIM_API void
 usersim_fwp_sock_ops_v4_remove_flow_context(_In_ uint64_t flow_id);
 

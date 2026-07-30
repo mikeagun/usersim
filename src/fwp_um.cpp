@@ -534,6 +534,12 @@ _IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS FwpmFilterDeleteById0(_In_ HANDLE en
     // Skip fault injection for this API because return failure status requires to remove filter from the list.
     auto& engine = *reinterpret_cast<fwp_engine_t*>(engine_handle);
 
+    // Test-only fault injection: fail the delete without removing the filter or issuing a delete notification,
+    // reproducing the field DELETE_FAILED reference-leak scenario.
+    if (engine.consume_filter_delete_failure()) {
+        return (NTSTATUS)STATUS_UNSUCCESSFUL;
+    }
+
     if (engine.remove_fwpm_filter(id)) {
         return STATUS_SUCCESS;
     } else {
@@ -1122,6 +1128,24 @@ usersim_fwp_set_sublayer_guids(
     _In_ const GUID& default_sublayer, _In_ const GUID& connect_v4_sublayer, _In_ const GUID& connect_v6_sublayer)
 {
     fwp_engine_t::get()->set_sublayer_guids(default_sublayer, connect_v4_sublayer, connect_v6_sublayer);
+}
+
+void
+usersim_fwp_set_filter_delete_failure_count(uint32_t count)
+{
+    fwp_engine_t::get()->set_filter_delete_failure_count(count);
+}
+
+uint32_t
+usersim_fwp_get_fwpm_filter_count()
+{
+    return (uint32_t)fwp_engine_t::get()->get_fwpm_filter_count();
+}
+
+void
+usersim_fwp_clear_fwpm_filters()
+{
+    fwp_engine_t::get()->clear_fwpm_filters();
 }
 
 void
