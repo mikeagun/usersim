@@ -131,6 +131,7 @@
     <ClInclude Include="ndis.h" />
     <ClInclude Include="net_platform.h" />
     <ClInclude Include="nmr_impl.h" />
+    <ClInclude Include="..\inc\usersim\nt_process_info.h" />
     <ClInclude Include="..\inc\usersim\ps.h" />
     <ClInclude Include="..\inc\usersim\rtl.h" />
     <ClInclude Include="..\inc\usersim\se.h" />
