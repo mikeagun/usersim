@@ -531,11 +531,11 @@ fwp_engine_t::test_cgroup_inet6_listen(_In_ fwp_classify_parameters_t* parameter
 
 _IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS FwpmFilterDeleteById0(_In_ HANDLE engine_handle, _In_ uint64_t id)
 {
-    // Skip fault injection for this API because return failure status requires to remove filter from the list.
     auto& engine = *reinterpret_cast<fwp_engine_t*>(engine_handle);
 
-    // Test-only fault injection: fail the delete without removing the filter or issuing a delete notification,
-    // reproducing the field DELETE_FAILED reference-leak scenario.
+    // Filter-delete failures are injected with a dedicated, caller-armed counter rather than the generic
+    // cxplat_fault_injection_inject_fault() path, so tests can fail specific deletes deterministically. See
+    // usersim_fwp_set_filter_delete_failure_count (fwp_test.h) for behavior and usage.
     if (engine.consume_filter_delete_failure()) {
         return (NTSTATUS)STATUS_UNSUCCESSFUL;
     }

@@ -189,8 +189,8 @@ typedef class fwp_engine_t
         fwpm_filters.clear();
     }
 
-    // Test-only fault injection: fail the next 'count' FwpmFilterDeleteById calls without removing the filter or
-    // issuing a delete notification, reproducing the WFP DELETE_FAILED reference-leak scenario.
+    // Arms the deterministic FwpmFilterDeleteById failure counter (see usersim_fwp_set_filter_delete_failure_count
+    // in fwp_test.h). Fails the next 'count' deletes; 0 disarms.
     void
     set_filter_delete_failure_count(uint32_t count)
     {
