@@ -7,9 +7,40 @@
 
 #include <shared_mutex>
 #include <unordered_map>
+#include <vector>
 
 typedef std::unique_lock<std::shared_mutex> exclusive_lock_t;
 typedef std::shared_lock<std::shared_mutex> shared_lock_t;
+
+// A WFP filter as stored by the mock engine.
+//
+// FWPM_FILTER0::providerKey is a pointer into caller-owned memory. Storing the FWPM_FILTER0 by value would
+// therefore alias whatever the caller happened to pass, and any later read of providerKey (for example when
+// enumerating filters by provider) would dereference memory the caller may already have released. The mock
+// deep-copies the GUID into the entry and re-points the stored filter at its own copy. std::unordered_map is
+// node-based, so the address of provider_key remains stable across rehashing.
+typedef struct _fwpm_filter_entry
+{
+    FWPM_FILTER0 filter;
+    GUID provider_key;
+} fwpm_filter_entry_t;
+
+// A WFP callout as stored by the mock engine. FWPM_CALLOUT0::providerKey has the same caller-owned-pointer
+// problem as FWPM_FILTER0::providerKey, and is deep-copied for the same reason.
+typedef struct _fwpm_callout_entry
+{
+    FWPM_CALLOUT0 callout;
+    GUID provider_key;
+} fwpm_callout_entry_t;
+
+// An in-progress enumeration. Real WFP enumerations are snapshots taken when the enum handle is created, so
+// objects deleted while an enumeration is open are still returned and objects added are not. The mock models
+// that explicitly, which also makes the common "enumerate everything, then delete each entry" pattern safe.
+template <typename T> struct fwpm_enum_state_t
+{
+    std::vector<T> entries;
+    size_t next_index = 0;
+};
 
 typedef class fwp_engine_t
 {
@@ -30,7 +61,16 @@ typedef class fwp_engine_t
     {
         exclusive_lock_t l(lock);
         uint32_t id = next_id++;
-        fwpm_callouts.insert({id, *callout});
+        auto& stored = fwpm_callouts.insert({id, fwpm_callout_entry_t{*callout, {}}}).first->second;
+
+        // Re-point the stored callout at the entry's own copy of the provider key (see fwpm_callout_entry_t).
+        if (callout->providerKey != nullptr) {
+            stored.provider_key = *callout->providerKey;
+            stored.callout.providerKey = &stored.provider_key;
+        } else {
+            stored.callout.providerKey = nullptr;
+        }
+
         return id;
     }
 
@@ -45,8 +85,8 @@ typedef class fwp_engine_t
     remove_fwpm_callout(_In_ const GUID* key)
     {
         exclusive_lock_t l(lock);
-        for (auto& [first, callout] : fwpm_callouts) {
-            if (memcmp(&callout.calloutKey, key, sizeof(GUID)) == 0) {
+        for (auto& [first, entry] : fwpm_callouts) {
+            if (memcmp(&entry.callout.calloutKey, key, sizeof(GUID)) == 0) {
                 return fwpm_callouts.erase(first) == 1;
             }
         }
@@ -135,7 +175,15 @@ typedef class fwp_engine_t
         {
             exclusive_lock_t l(lock);
             id = next_id++;
-            fwpm_filters.insert({id, *filter});
+            auto& stored = fwpm_filters.insert({id, fwpm_filter_entry_t{*filter, {}}}).first->second;
+
+            // Re-point the stored filter at the entry's own copy of the provider key (see fwpm_filter_entry_t).
+            if (filter->providerKey != nullptr) {
+                stored.provider_key = *filter->providerKey;
+                stored.filter.providerKey = &stored.provider_key;
+            } else {
+                stored.filter.providerKey = nullptr;
+            }
 
             callout = get_fwps_callout(&filter->action.calloutKey);
             CXPLAT_DEBUG_ASSERT(callout != nullptr);
@@ -161,9 +209,9 @@ typedef class fwp_engine_t
                 if (it.first == id) {
                     // May be null if the callout function has already been unregistered (e.g., during driver
                     // unload); in that case WFP delivers no delete notification (handled below).
-                    callout = get_fwps_callout(&it.second.action.calloutKey);
+                    callout = get_fwps_callout(&it.second.filter.action.calloutKey);
                     fwps_filter.filterId = id;
-                    fwps_filter.context = it.second.rawContext;
+                    fwps_filter.context = it.second.filter.rawContext;
                     break;
                 }
             }
@@ -216,6 +264,122 @@ typedef class fwp_engine_t
     {
         shared_lock_t l(lock);
         return fwpm_filters.size();
+    }
+
+    // Creates a snapshot of the filters matching the (optional) enumeration template, and returns a handle to it.
+    // A null template matches every filter, as it does in real WFP.
+    _Requires_lock_not_held_(this->lock) uint64_t
+        create_fwpm_filter_enum_handle(_In_opt_ const FWPM_FILTER_ENUM_TEMPLATE0* enum_template)
+    {
+        exclusive_lock_t l(lock);
+        uint64_t handle = next_enum_handle++;
+        auto& state = fwpm_filter_enums[handle];
+        for (auto& [id, entry] : fwpm_filters) {
+            if (!provider_key_matches(entry.filter.providerKey, enum_template ? enum_template->providerKey : nullptr)) {
+                continue;
+            }
+            if (enum_template != nullptr && !is_null_guid(enum_template->layerKey) &&
+                memcmp(&entry.filter.layerKey, &enum_template->layerKey, sizeof(GUID)) != 0) {
+                continue;
+            }
+
+            state.entries.push_back(entry);
+            rebind_filter_entry(state.entries.back());
+        }
+        return handle;
+    }
+
+    // Copies up to 'requested' entries from the snapshot into 'out', advancing the enumeration cursor.
+    _Requires_lock_not_held_(this->lock) bool next_fwpm_filter_enum_entries(
+        uint64_t handle, uint32_t requested, _Inout_ std::vector<fwpm_filter_entry_t>& out)
+    {
+        exclusive_lock_t l(lock);
+        auto it = fwpm_filter_enums.find(handle);
+        if (it == fwpm_filter_enums.end()) {
+            return false;
+        }
+
+        auto& state = it->second;
+        while (out.size() < requested && state.next_index < state.entries.size()) {
+            out.push_back(state.entries[state.next_index++]);
+            rebind_filter_entry(out.back());
+        }
+        return true;
+    }
+
+    _Requires_lock_not_held_(this->lock) bool destroy_fwpm_filter_enum_handle(uint64_t handle)
+    {
+        exclusive_lock_t l(lock);
+        return fwpm_filter_enums.erase(handle) == 1;
+    }
+
+    // Rewinds the filter enumeration cursor by 'count' entries. Used when a batch was taken from the snapshot but
+    // could not be handed to the caller, so those entries are enumerated again rather than silently skipped.
+    _Requires_lock_not_held_(this->lock) void rewind_fwpm_filter_enum(uint64_t handle, size_t count)
+    {
+        exclusive_lock_t l(lock);
+        auto it = fwpm_filter_enums.find(handle);
+        if (it != fwpm_filter_enums.end()) {
+            auto& state = it->second;
+            state.next_index -= (count < state.next_index) ? count : state.next_index;
+        }
+    }
+
+    // Creates a snapshot of the callouts matching the (optional) enumeration template, and returns a handle to it.
+    _Requires_lock_not_held_(this->lock) uint64_t
+        create_fwpm_callout_enum_handle(_In_opt_ const FWPM_CALLOUT_ENUM_TEMPLATE0* enum_template)
+    {
+        exclusive_lock_t l(lock);
+        uint64_t handle = next_enum_handle++;
+        auto& state = fwpm_callout_enums[handle];
+        for (auto& [id, entry] : fwpm_callouts) {
+            if (!provider_key_matches(
+                    entry.callout.providerKey, enum_template ? enum_template->providerKey : nullptr)) {
+                continue;
+            }
+            if (enum_template != nullptr && !is_null_guid(enum_template->layerKey) &&
+                memcmp(&entry.callout.applicableLayer, &enum_template->layerKey, sizeof(GUID)) != 0) {
+                continue;
+            }
+
+            state.entries.push_back(entry);
+            rebind_callout_entry(state.entries.back());
+        }
+        return handle;
+    }
+
+    _Requires_lock_not_held_(this->lock) bool next_fwpm_callout_enum_entries(
+        uint64_t handle, uint32_t requested, _Inout_ std::vector<fwpm_callout_entry_t>& out)
+    {
+        exclusive_lock_t l(lock);
+        auto it = fwpm_callout_enums.find(handle);
+        if (it == fwpm_callout_enums.end()) {
+            return false;
+        }
+
+        auto& state = it->second;
+        while (out.size() < requested && state.next_index < state.entries.size()) {
+            out.push_back(state.entries[state.next_index++]);
+            rebind_callout_entry(out.back());
+        }
+        return true;
+    }
+
+    _Requires_lock_not_held_(this->lock) bool destroy_fwpm_callout_enum_handle(uint64_t handle)
+    {
+        exclusive_lock_t l(lock);
+        return fwpm_callout_enums.erase(handle) == 1;
+    }
+
+    // Rewinds the callout enumeration cursor by 'count' entries. See rewind_fwpm_filter_enum.
+    _Requires_lock_not_held_(this->lock) void rewind_fwpm_callout_enum(uint64_t handle, size_t count)
+    {
+        exclusive_lock_t l(lock);
+        auto it = fwpm_callout_enums.find(handle);
+        if (it != fwpm_callout_enums.end()) {
+            auto& state = it->second;
+            state.next_index -= (count < state.next_index) ? count : state.next_index;
+        }
     }
 
     _Requires_lock_not_held_(this->lock) void add_fwpm_provider(_In_ const FWPM_PROVIDER* provider)
@@ -305,6 +469,45 @@ typedef class fwp_engine_t
     }
 
   private:
+    // Re-points a copied entry's providerKey at its own GUID copy. A byte-wise copy of an entry would otherwise
+    // leave providerKey aliasing the GUID inside the entry it was copied from (see fwpm_filter_entry_t).
+    static void
+    rebind_filter_entry(_Inout_ fwpm_filter_entry_t& entry)
+    {
+        if (entry.filter.providerKey != nullptr) {
+            entry.filter.providerKey = &entry.provider_key;
+        }
+    }
+
+    static void
+    rebind_callout_entry(_Inout_ fwpm_callout_entry_t& entry)
+    {
+        if (entry.callout.providerKey != nullptr) {
+            entry.callout.providerKey = &entry.provider_key;
+        }
+    }
+
+    static bool
+    is_null_guid(_In_ const GUID& guid)
+    {
+        static const GUID null_guid = {};
+        return memcmp(&guid, &null_guid, sizeof(GUID)) == 0;
+    }
+
+    // Applies an enumeration template's providerKey filter. A null template key matches every object, including
+    // objects with no provider; a non-null template key matches only objects tagged with that exact provider.
+    static bool
+    provider_key_matches(_In_opt_ const GUID* object_key, _In_opt_ const GUID* template_key)
+    {
+        if (template_key == nullptr) {
+            return true;
+        }
+        if (object_key == nullptr) {
+            return false;
+        }
+        return memcmp(object_key, template_key, sizeof(GUID)) == 0;
+    }
+
     _Requires_lock_not_held_(this->lock) FWP_ACTION_TYPE test_callout(
         uint16_t layer_id,
         _In_ const GUID& layer_guid,
@@ -320,9 +523,9 @@ typedef class fwp_engine_t
     _Ret_maybenull_ const FWPM_FILTER*
     get_fwpm_filter_with_context_under_lock(_In_ const GUID& layer_guid)
     {
-        for (auto& [first, filter] : fwpm_filters) {
-            if (memcmp(&filter.layerKey, &layer_guid, sizeof(GUID)) == 0 && filter.rawContext != 0) {
-                return &filter;
+        for (auto& [first, entry] : fwpm_filters) {
+            if (memcmp(&entry.filter.layerKey, &layer_guid, sizeof(GUID)) == 0 && entry.filter.rawContext != 0) {
+                return &entry.filter;
             }
         }
         return nullptr;
@@ -331,10 +534,11 @@ typedef class fwp_engine_t
     _Ret_maybenull_ const FWPM_FILTER*
     get_fwpm_filter_with_context_under_lock(_In_ const GUID& layer_guid, _In_ const GUID& sublayer_guid)
     {
-        for (auto& [first, filter] : fwpm_filters) {
-            if (memcmp(&filter.layerKey, &layer_guid, sizeof(GUID)) == 0 &&
-                memcmp(&filter.subLayerKey, &sublayer_guid, sizeof(GUID)) == 0 && filter.rawContext != 0) {
-                return &filter;
+        for (auto& [first, entry] : fwpm_filters) {
+            if (memcmp(&entry.filter.layerKey, &layer_guid, sizeof(GUID)) == 0 &&
+                memcmp(&entry.filter.subLayerKey, &sublayer_guid, sizeof(GUID)) == 0 &&
+                entry.filter.rawContext != 0) {
+                return &entry.filter;
             }
         }
         return nullptr;
@@ -343,9 +547,9 @@ typedef class fwp_engine_t
     _Ret_maybenull_ const GUID*
     get_callout_key_from_layer_guid_under_lock(_In_ const GUID* layer_guid)
     {
-        for (auto& [first, callout] : fwpm_callouts) {
-            if (callout.applicableLayer == *layer_guid) {
-                return &callout.calloutKey;
+        for (auto& [first, entry] : fwpm_callouts) {
+            if (entry.callout.applicableLayer == *layer_guid) {
+                return &entry.callout.calloutKey;
             }
         }
         return nullptr;
@@ -378,10 +582,13 @@ typedef class fwp_engine_t
     std::shared_mutex lock;
     uint32_t next_id = 1;
     uint32_t next_flow_id = 1;
+    uint64_t next_enum_handle = 1;
     uint32_t _filter_delete_failure_count = 0; // Test-only WFP filter delete fault-injection counter.
     std::unordered_map<size_t, FWPS_CALLOUT3> fwps_callouts;
-    std::unordered_map<size_t, FWPM_CALLOUT0> fwpm_callouts;
-    std::unordered_map<size_t, FWPM_FILTER0> fwpm_filters;
+    std::unordered_map<size_t, fwpm_callout_entry_t> fwpm_callouts;
+    std::unordered_map<size_t, fwpm_filter_entry_t> fwpm_filters;
+    std::unordered_map<uint64_t, fwpm_enum_state_t<fwpm_filter_entry_t>> fwpm_filter_enums;
+    std::unordered_map<uint64_t, fwpm_enum_state_t<fwpm_callout_entry_t>> fwpm_callout_enums;
     std::unordered_map<size_t, FWPM_SUBLAYER0> fwpm_sub_layers;
     std::unordered_map<uint64_t, uint64_t> fwpm_flow_contexts;
     GUID _default_sublayer = {};
