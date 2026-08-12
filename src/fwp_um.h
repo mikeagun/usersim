@@ -33,6 +33,15 @@ typedef struct _fwpm_callout_entry
     GUID provider_key;
 } fwpm_callout_entry_t;
 
+// A WFP sub-layer as stored by the mock engine. FWPM_SUBLAYER0::providerKey has the same caller-owned-pointer
+// problem as the filter and callout cases, and is deep-copied for the same reason: the reference checks that back
+// FWP_E_IN_USE dereference it.
+typedef struct _fwpm_sub_layer_entry
+{
+    FWPM_SUBLAYER0 sub_layer;
+    GUID provider_key;
+} fwpm_sub_layer_entry_t;
+
 // An in-progress enumeration. Real WFP enumerations are snapshots taken when the enum handle is created, so
 // objects deleted while an enumeration is open are still returned and objects added are not. The mock models
 // that explicitly, which also makes the common "enumerate everything, then delete each entry" pattern safe.
@@ -81,17 +90,32 @@ typedef class fwp_engine_t
         return fwpm_callouts.erase(id) == 1;
     }
 
-    bool
-    remove_fwpm_callout(_In_ const GUID* key)
+    _Requires_lock_not_held_(this->lock) NTSTATUS delete_fwpm_callout(_In_ const GUID* key)
     {
         exclusive_lock_t l(lock);
+
+        // Report a missing object as not-found even if some filter still carries the key: an object that does not
+        // exist cannot be in use.
+        size_t id = 0;
+        bool found = false;
         for (auto& [first, entry] : fwpm_callouts) {
             if (memcmp(&entry.callout.calloutKey, key, sizeof(GUID)) == 0) {
-                return fwpm_callouts.erase(first) == 1;
+                id = first;
+                found = true;
+                break;
             }
         }
 
-        return false;
+        if (!found) {
+            return (NTSTATUS)FWP_E_CALLOUT_NOT_FOUND;
+        }
+
+        if (is_callout_referenced_under_lock(key)) {
+            return (NTSTATUS)FWP_E_IN_USE;
+        }
+
+        fwpm_callouts.erase(id);
+        return STATUS_SUCCESS;
     }
 
     uint32_t
@@ -382,23 +406,65 @@ typedef class fwp_engine_t
         }
     }
 
-    _Requires_lock_not_held_(this->lock) void add_fwpm_provider(_In_ const FWPM_PROVIDER* provider)
+    // Adds a provider, rejecting a duplicate as real WFP does. Object identity matters here: a provider that
+    // outlives the driver that created it is what makes a subsequent FwpmProviderAdd fail, so a mock that always
+    // accepts the add cannot reproduce that class of bug.
+    //
+    // Unlike FWPM_FILTER0/FWPM_CALLOUT0, FWPM_PROVIDER0::providerKey is a GUID by value, so the stored copy owns
+    // its own key and needs no re-binding. The remaining pointer members (displayData strings, serviceName,
+    // providerData) are still shallow copies of caller memory, which is safe only because nothing reads them:
+    // deep-copy them before adding any accessor or enumerator that hands a stored provider back to a caller.
+    _Requires_lock_not_held_(this->lock) bool add_fwpm_provider(_In_ const FWPM_PROVIDER* provider)
     {
-        UNREFERENCED_PARAMETER(provider);
-        return;
+        exclusive_lock_t l(lock);
+        if (get_fwpm_provider_under_lock(&provider->providerKey) != nullptr) {
+            return false;
+        }
+
+        fwpm_providers.insert({next_id++, *provider});
+        return true;
     }
 
-    _Requires_lock_not_held_(this->lock) void remove_fwpm_provider(_In_ const GUID* key)
+    _Requires_lock_not_held_(this->lock) NTSTATUS delete_fwpm_provider(_In_ const GUID* key)
     {
-        UNREFERENCED_PARAMETER(key);
-        return;
+        exclusive_lock_t l(lock);
+
+        size_t id = 0;
+        bool found = false;
+        for (auto& [first, provider] : fwpm_providers) {
+            if (memcmp(&provider.providerKey, key, sizeof(GUID)) == 0) {
+                id = first;
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            return (NTSTATUS)FWP_E_PROVIDER_NOT_FOUND;
+        }
+
+        if (is_provider_referenced_under_lock(key)) {
+            return (NTSTATUS)FWP_E_IN_USE;
+        }
+
+        fwpm_providers.erase(id);
+        return STATUS_SUCCESS;
     }
 
     _Requires_lock_not_held_(this->lock) uint32_t add_fwpm_sub_layer(_In_ const FWPM_SUBLAYER0* sub_layer)
     {
         exclusive_lock_t l(lock);
         uint32_t id = next_id++;
-        fwpm_sub_layers.insert({id, *sub_layer});
+        auto& stored = fwpm_sub_layers.insert({id, fwpm_sub_layer_entry_t{*sub_layer, {}}}).first->second;
+
+        // Re-point the stored sub-layer at the entry's own copy of the provider key (see fwpm_sub_layer_entry_t).
+        if (sub_layer->providerKey != nullptr) {
+            stored.provider_key = *sub_layer->providerKey;
+            stored.sub_layer.providerKey = &stored.provider_key;
+        } else {
+            stored.sub_layer.providerKey = nullptr;
+        }
+
         return id;
     }
 
@@ -408,16 +474,30 @@ typedef class fwp_engine_t
         return fwpm_sub_layers.erase(id) == 1;
     }
 
-    _Requires_lock_not_held_(this->lock) bool remove_fwpm_sub_layer(_In_ const GUID* key)
+    _Requires_lock_not_held_(this->lock) NTSTATUS delete_fwpm_sub_layer(_In_ const GUID* key)
     {
         exclusive_lock_t l(lock);
-        for (auto& [first, sub_layer] : fwpm_sub_layers) {
-            if (memcmp(&sub_layer.subLayerKey, key, sizeof(GUID)) == 0) {
-                return fwpm_sub_layers.erase(first) == 1;
+
+        size_t id = 0;
+        bool found = false;
+        for (auto& [first, entry] : fwpm_sub_layers) {
+            if (memcmp(&entry.sub_layer.subLayerKey, key, sizeof(GUID)) == 0) {
+                id = first;
+                found = true;
+                break;
             }
         }
 
-        return false;
+        if (!found) {
+            return (NTSTATUS)FWP_E_SUBLAYER_NOT_FOUND;
+        }
+
+        if (is_sub_layer_referenced_under_lock(key)) {
+            return (NTSTATUS)FWP_E_IN_USE;
+        }
+
+        fwpm_sub_layers.erase(id);
+        return STATUS_SUCCESS;
     }
 
     FWP_ACTION_TYPE
@@ -544,6 +624,81 @@ typedef class fwp_engine_t
         return nullptr;
     }
 
+    // Reference checks backing FWP_E_IN_USE. Real WFP refuses to delete an object that another object still
+    // points at, which is the mechanism by which a filter that could not be deleted keeps its callout, sub-layer
+    // and provider alive across a driver unload. Without this the mock would happily delete a referenced object
+    // and no test could observe that failure mode.
+    static bool
+    is_callout_action(FWP_ACTION_TYPE action_type)
+    {
+        return action_type == FWP_ACTION_CALLOUT_TERMINATING || action_type == FWP_ACTION_CALLOUT_INSPECTION ||
+               action_type == FWP_ACTION_CALLOUT_UNKNOWN;
+    }
+
+    bool
+    is_callout_referenced_under_lock(_In_ const GUID* callout_key)
+    {
+        for (auto& [first, entry] : fwpm_filters) {
+            // FWPM_ACTION0::calloutKey shares a union with filterType, so it only holds a callout key when the
+            // action is a callout action. Comparing it for any other action type would match unrelated bytes and
+            // report a spurious FWP_E_IN_USE.
+            if (!is_callout_action(entry.filter.action.type)) {
+                continue;
+            }
+            if (memcmp(&entry.filter.action.calloutKey, callout_key, sizeof(GUID)) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool
+    is_sub_layer_referenced_under_lock(_In_ const GUID* sub_layer_key)
+    {
+        for (auto& [first, entry] : fwpm_filters) {
+            if (memcmp(&entry.filter.subLayerKey, sub_layer_key, sizeof(GUID)) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // A provider is referenced by any filter, callout or sub-layer tagged with it.
+    bool
+    is_provider_referenced_under_lock(_In_ const GUID* provider_key)
+    {
+        for (auto& [first, entry] : fwpm_filters) {
+            if (entry.filter.providerKey != nullptr &&
+                memcmp(entry.filter.providerKey, provider_key, sizeof(GUID)) == 0) {
+                return true;
+            }
+        }
+        for (auto& [first, entry] : fwpm_callouts) {
+            if (entry.callout.providerKey != nullptr &&
+                memcmp(entry.callout.providerKey, provider_key, sizeof(GUID)) == 0) {
+                return true;
+            }
+        }
+        for (auto& [first, entry] : fwpm_sub_layers) {
+            if (entry.sub_layer.providerKey != nullptr &&
+                memcmp(entry.sub_layer.providerKey, provider_key, sizeof(GUID)) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    _Ret_maybenull_ const FWPM_PROVIDER*
+    get_fwpm_provider_under_lock(_In_ const GUID* provider_key)
+    {
+        for (auto& [first, provider] : fwpm_providers) {
+            if (memcmp(&provider.providerKey, provider_key, sizeof(GUID)) == 0) {
+                return &provider;
+            }
+        }
+        return nullptr;
+    }
+
     _Ret_maybenull_ const GUID*
     get_callout_key_from_layer_guid_under_lock(_In_ const GUID* layer_guid)
     {
@@ -589,7 +744,8 @@ typedef class fwp_engine_t
     std::unordered_map<size_t, fwpm_filter_entry_t> fwpm_filters;
     std::unordered_map<uint64_t, fwpm_enum_state_t<fwpm_filter_entry_t>> fwpm_filter_enums;
     std::unordered_map<uint64_t, fwpm_enum_state_t<fwpm_callout_entry_t>> fwpm_callout_enums;
-    std::unordered_map<size_t, FWPM_SUBLAYER0> fwpm_sub_layers;
+    std::unordered_map<size_t, fwpm_sub_layer_entry_t> fwpm_sub_layers;
+    std::unordered_map<size_t, FWPM_PROVIDER0> fwpm_providers;
     std::unordered_map<uint64_t, uint64_t> fwpm_flow_contexts;
     GUID _default_sublayer = {};
     GUID _connect_v4_sublayer = {};

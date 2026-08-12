@@ -809,10 +809,7 @@ _IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS FwpmCalloutDeleteByKey0(_In_ HANDLE 
 
     auto& engine = *reinterpret_cast<fwp_engine_t*>(engine_handle);
 
-    if (!engine.remove_fwpm_callout(key)) {
-        return (NTSTATUS)FWP_E_CALLOUT_NOT_FOUND;
-    }
-    return STATUS_SUCCESS;
+    return engine.delete_fwpm_callout(key);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS FwpmEngineOpen0(
@@ -844,7 +841,11 @@ _IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS
 
     auto& engine = *reinterpret_cast<fwp_engine_t*>(engine_handle);
 
-    engine.add_fwpm_provider(provider);
+    if (!engine.add_fwpm_provider(provider)) {
+        // A provider with this key already exists. Real WFP reports this rather than silently accepting the add,
+        // and it is how a caller discovers that a previous instance's provider outlived it.
+        return (NTSTATUS)FWP_E_ALREADY_EXISTS;
+    }
 
     UNREFERENCED_PARAMETER(sd);
     return STATUS_SUCCESS;
@@ -858,12 +859,7 @@ _IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS FwpmProviderDeleteByKey0(_In_ HANDLE
 
     auto& engine = *reinterpret_cast<fwp_engine_t*>(engine_handle);
 
-    engine.remove_fwpm_provider(key);
-    if (cxplat_fault_injection_inject_fault()) {
-        return STATUS_NOT_FOUND;
-    }
-
-    return STATUS_SUCCESS;
+    return engine.delete_fwpm_provider(key);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS
@@ -890,10 +886,7 @@ _IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS
 
     auto& engine = *reinterpret_cast<fwp_engine_t*>(engine_handle);
 
-    if (!engine.remove_fwpm_sub_layer(sub_layer_key)) {
-        return (NTSTATUS)FWP_E_SUBLAYER_NOT_FOUND;
-    }
-    return STATUS_SUCCESS;
+    return engine.delete_fwpm_sub_layer(sub_layer_key);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS FwpmEngineClose0(_Inout_ HANDLE engine_handle)
