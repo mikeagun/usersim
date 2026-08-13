@@ -97,6 +97,8 @@ _IRQL_requires_max_(DISPATCH_LEVEL) USERSIM_API LONG_PTR ObfDereferenceObject(_I
 static NTSTATUS
 _create_event_object(_In_ HANDLE handle, _Outptr_ PVOID* object)
 {
+    *object = nullptr;
+
     // Duplicate the handle so this object owns its own reference to the event and
     // releasing it never invalidates the caller's handle. A duplicate refers to
     // the same underlying event, so signaling it wakes anyone waiting on the
@@ -160,6 +162,8 @@ _IRQL_requires_max_(PASSIVE_LEVEL) USERSIM_API NTSTATUS ObReferenceObjectByHandl
             return STATUS_SUCCESS;
         }
         if (status != STATUS_INVALID_HANDLE) {
+            // Report the failure, but still write the out parameter.
+            *object = handle;
             return status;
         }
         // The value is not a handle to a Win32 object. Fall through to the

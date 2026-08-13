@@ -10,6 +10,9 @@
 #include "usersim/mm.h"
 #include "usersim/ob.h"
 
+#include <chrono>
+#include <thread>
+
 TEST_CASE("ObfReferenceObject", "[ob]")
 {
     int x = 0;
@@ -129,5 +132,77 @@ TEST_CASE("ObOpenObjectByPointer event", "[ob]")
 
     REQUIRE(CloseHandle(opened));
     REQUIRE(ObfDereferenceObject(object) == 0);
+    REQUIRE(CloseHandle(handle));
+}
+
+TEST_CASE("ObReferenceObjectByHandle auto-reset event", "[ob]")
+{
+    // The Win32 event carries its own reset mode, so an auto-reset event must
+    // behave as an auto-reset event through the returned object.
+    HANDLE handle = CreateEvent(nullptr, FALSE /* auto reset */, FALSE, nullptr);
+    REQUIRE(handle != nullptr);
+
+    void* object = nullptr;
+    REQUIRE(
+        ObReferenceObjectByHandle(handle, EVENT_MODIFY_STATE | SYNCHRONIZE, *ExEventObjectType, 0, &object, nullptr) ==
+        STATUS_SUCCESS);
+
+    LARGE_INTEGER timeout = {0};
+    KeSetEvent((PKEVENT)object, 0, FALSE);
+
+    // The first wait consumes the signal, the second must time out.
+    REQUIRE(KeWaitForSingleObject(object, Executive, KernelMode, FALSE, &timeout) == STATUS_SUCCESS);
+    REQUIRE(KeWaitForSingleObject(object, Executive, KernelMode, FALSE, &timeout) == STATUS_TIMEOUT);
+
+    REQUIRE(ObfDereferenceObject(object) == 0);
+    REQUIRE(CloseHandle(handle));
+}
+
+TEST_CASE("ObReferenceObjectByHandle event blocking wait", "[ob]")
+{
+    HANDLE handle = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    REQUIRE(handle != nullptr);
+
+    void* object = nullptr;
+    REQUIRE(
+        ObReferenceObjectByHandle(handle, EVENT_MODIFY_STATE | SYNCHRONIZE, *ExEventObjectType, 0, &object, nullptr) ==
+        STATUS_SUCCESS);
+
+    // A wait with no timeout must block until another thread signals the event.
+    NTSTATUS wait_status = STATUS_UNSUCCESSFUL;
+    {
+        std::jthread signaler([&]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            KeSetEvent((PKEVENT)object, 0, FALSE);
+        });
+        wait_status = KeWaitForSingleObject(object, Executive, KernelMode, FALSE, nullptr);
+    }
+    REQUIRE(wait_status == STATUS_SUCCESS);
+
+    REQUIRE(ObfDereferenceObject(object) == 0);
+    REQUIRE(CloseHandle(handle));
+}
+
+TEST_CASE("usersim_clean_up_ob releases outstanding event objects", "[ob]")
+{
+    HANDLE handle = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    REQUIRE(handle != nullptr);
+
+    // Callers commonly release with ObDereferenceObject(), which is a no-op, so
+    // reference an event and never release it explicitly.
+    void* object = nullptr;
+    REQUIRE(
+        ObReferenceObjectByHandle(handle, EVENT_MODIFY_STATE, *ExEventObjectType, 0, &object, nullptr) ==
+        STATUS_SUCCESS);
+    KeSetEvent((PKEVENT)object, 0, FALSE);
+    REQUIRE(WaitForSingleObject(handle, 0) == WAIT_OBJECT_0);
+
+    // Teardown must reclaim it, and must be safe to repeat.
+    usersim_clean_up_ob();
+    usersim_clean_up_ob();
+
+    // The caller's own handle must be unaffected.
+    REQUIRE(ResetEvent(handle));
+    REQUIRE(WaitForSingleObject(handle, 0) == WAIT_TIMEOUT);
     REQUIRE(CloseHandle(handle));
 }
