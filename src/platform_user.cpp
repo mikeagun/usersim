@@ -7,6 +7,7 @@
 #include "usersim/ex.h"
 #include "usersim/ke.h"
 #include "usersim/mm.h"
+#include "usersim/ob.h"
 #include "usersim/ps.h"
 #include "usersim/se.h"
 #include "usersim/wdf.h"
@@ -105,6 +106,7 @@ usersim_platform_terminate()
 
     usersim_free_semaphores();
     usersim_free_threadpool_timers();
+    usersim_clean_up_ob();
     usersim_clean_up_ps();
     usersim_clean_up_dpcs();
     usersim_clean_up_irql();

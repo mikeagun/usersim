@@ -42,4 +42,11 @@ USERSIM_API
 NTSTATUS
 ObCloseHandle(_In_ _Post_ptr_invalid_ HANDLE handle, _In_ KPROCESSOR_MODE previous_mode);
 
+/**
+ * @brief Release any event objects created by ObReferenceObjectByHandle() that
+ * were not released by ObfDereferenceObject(). Called during platform teardown.
+ */
+void
+usersim_clean_up_ob();
+
 CXPLAT_EXTERN_C_END

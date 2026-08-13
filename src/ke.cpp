@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation
 // SPDX-License-Identifier: MIT
 
+#include "ob_internal.h"
 #include "platform.h"
 #include "usersim/ke.h"
 #include "utilities.h"
@@ -723,6 +724,9 @@ _IRQL_requires_min_(PASSIVE_LEVEL) _When_((timeout == NULL || timeout->QuadPart 
     case USERSIM_OBJECT_TYPE_EVENT: {
         return _wait_for_kevent((KEVENT*)object, timeout);
     }
+    case USERSIM_OBJECT_TYPE_EVENT_HANDLE: {
+        return _wait_for_kevent((KEVENT*)object, timeout);
+    }
     default:
         ASSERT(FALSE);
         return STATUS_INVALID_PARAMETER;
@@ -1205,7 +1209,7 @@ KeSetEvent(_Inout_ PKEVENT event, _In_ KPRIORITY increment, _In_ BOOLEAN wait)
     UNREFERENCED_PARAMETER(increment);
     UNREFERENCED_PARAMETER(wait);
 
-    ASSERT(event->object_type == USERSIM_OBJECT_TYPE_EVENT);
+    ASSERT(event->object_type == USERSIM_OBJECT_TYPE_EVENT || event->object_type == USERSIM_OBJECT_TYPE_EVENT_HANDLE);
     KIRQL old_irql;
     LONG previous_state;
     KeAcquireSpinLock(&event->spin_lock, &old_irql);
@@ -1214,6 +1218,15 @@ KeSetEvent(_Inout_ PKEVENT event, _In_ KPRIORITY increment, _In_ BOOLEAN wait)
     event->signaled = TRUE;
 
     KeReleaseSpinLock(&event->spin_lock, old_irql);
+
+    HANDLE handle = usersim_get_event_handle(event);
+    if (handle != nullptr) {
+        // The Win32 event owns the state that waiters observe, so signal it.
+        // previous_state is best effort here: a waiter can consume an auto-reset
+        // signal without the cached signaled field being updated.
+        ::SetEvent(handle);
+        return previous_state;
+    }
 
     // Wake up any waiters.
     WakeByAddressAll(&event->signaled);
@@ -1224,13 +1237,18 @@ USERSIM_API
 void
 KeClearEvent(_Inout_ PKEVENT event)
 {
-    ASSERT(event->object_type == USERSIM_OBJECT_TYPE_EVENT);
+    ASSERT(event->object_type == USERSIM_OBJECT_TYPE_EVENT || event->object_type == USERSIM_OBJECT_TYPE_EVENT_HANDLE);
     KIRQL old_irql;
     KeAcquireSpinLock(&event->spin_lock, &old_irql);
 
     event->signaled = FALSE;
 
     KeReleaseSpinLock(&event->spin_lock, old_irql);
+
+    HANDLE handle = usersim_get_event_handle(event);
+    if (handle != nullptr) {
+        ::ResetEvent(handle);
+    }
 }
 
 /**
@@ -1254,6 +1272,21 @@ _wait_for_kevent(_Inout_ KEVENT* event, _In_opt_ PLARGE_INTEGER timeout)
         end_time = timeout->QuadPart;
     } else {
         end_time = start_time - timeout->QuadPart;
+    }
+
+    HANDLE handle = usersim_get_event_handle(event);
+    if (handle != nullptr) {
+        // The Win32 event owns the signaled state and implements its own
+        // notification or synchronization reset behavior, so wait on it directly.
+        DWORD timeout_ms = (timeout == nullptr) ? INFINITE : (DWORD)((end_time - start_time) / 10000);
+        switch (WaitForSingleObject(handle, timeout_ms)) {
+        case WAIT_OBJECT_0:
+            return STATUS_SUCCESS;
+        case WAIT_TIMEOUT:
+            return STATUS_TIMEOUT;
+        default:
+            return STATUS_UNSUCCESSFUL;
+        }
     }
 
     for (;;) {

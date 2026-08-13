@@ -24,6 +24,10 @@ typedef enum _usersim_object_type
     USERSIM_OBJECT_TYPE_SEMAPHORE,
     USERSIM_OBJECT_TYPE_TIMER,
     USERSIM_OBJECT_TYPE_EVENT,
+    // An event that is bound to a Win32 event object, as returned by
+    // ObReferenceObjectByHandle() for ExEventObjectType. New enumerators must be
+    // appended so that the value of the existing ones does not change.
+    USERSIM_OBJECT_TYPE_EVENT_HANDLE,
 } usersim_object_type_t;
 
 typedef enum
@@ -302,6 +306,19 @@ USERSIM_API
 void
 KeInitializeEvent(_Out_ PKEVENT event, _In_ EVENT_TYPE type, _In_ BOOLEAN initial_state);
 
+/**
+ * @brief Set an event to the signaled state.
+ *
+ * For an event bound to a Win32 event object (one obtained from
+ * ObReferenceObjectByHandle() for ExEventObjectType), the Win32 object owns the
+ * signaled state, so the returned previous state is best effort: a waiter may
+ * consume an auto-reset signal without this value being updated.
+ *
+ * @param[in,out] event Event to signal.
+ * @param[in] increment Priority increment, ignored.
+ * @param[in] wait Whether the caller will immediately wait, ignored.
+ * @returns The previous signaled state.
+ */
 USERSIM_API
 LONG
 KeSetEvent(_Inout_ PRKEVENT event, _In_ KPRIORITY increment, _In_ _Literal_ BOOLEAN wait);
