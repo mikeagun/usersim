@@ -201,6 +201,11 @@ typedef class fwp_engine_t
             id = next_id++;
             auto& stored = fwpm_filters.insert({id, fwpm_filter_entry_t{*filter, {}}}).first->second;
 
+            // Record the assigned run-time identifier in the stored filter. Real WFP populates FWPM_FILTER0::filterId
+            // on add and reports it through enumeration, and it is the only handle a caller that did not add the
+            // filter itself has for deleting it.
+            stored.filter.filterId = id;
+
             // Re-point the stored filter at the entry's own copy of the provider key (see fwpm_filter_entry_t).
             if (filter->providerKey != nullptr) {
                 stored.provider_key = *filter->providerKey;

@@ -945,7 +945,10 @@ _IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS FwpsCalloutUnregisterById0(_In_ cons
     if (engine.remove_fwps_callout(callout_id)) {
         return STATUS_SUCCESS;
     } else {
-        return STATUS_INVALID_PARAMETER;
+        // Real WFP reports an unregistered run-time identifier as FWP_E_CALLOUT_NOT_FOUND. Callers unregister
+        // callouts on cleanup paths where some were never registered, and they treat "not found" as success, so a
+        // generic status here would turn a benign no-op into an apparent failure.
+        return (NTSTATUS)FWP_E_CALLOUT_NOT_FOUND;
     }
 }
 
